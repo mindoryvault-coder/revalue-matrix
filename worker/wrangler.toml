@@ -1,0 +1,15 @@
+name = "revalue-matrix-api"
+main = "src/worker.js"
+compatibility_date = "2026-06-08"
+
+[observability]
+enabled = true
+
+[vars]
+# 여러 도메인을 허용하려면 쉼표로 구분합니다.
+# 예: "https://yourname.github.io,https://www.your-domain.com"
+ALLOWED_ORIGINS = ""
+
+# 선택 사항입니다. PNU 자동 조회가 실패했을 때 지번주소 파싱 보조값으로만 사용합니다.
+MOLIT_SIGUNGU_CD = ""
+MOLIT_BJDONG_CD = ""
