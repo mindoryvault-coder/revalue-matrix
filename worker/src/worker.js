@@ -602,7 +602,9 @@ function molitParamVariants(params) {
   if (!params) return [];
   const variants = [params];
   const altPlatGbCd = params.platGbCd === "1" ? "0" : "1";
-  variants.push({ ...params, source: `${params.source}_alt_plat`, platGbCd: altPlatGbCd });
+  if (params.source !== "vworld_pnu" || params.platGbCd === "1") {
+    variants.push({ ...params, source: `${params.source}_alt_plat`, platGbCd: altPlatGbCd });
+  }
   const seen = new Set();
   return variants.filter((item) => {
     const key = `${item.sigunguCd}|${item.bjdongCd}|${item.platGbCd}|${item.bun}|${item.ji}`;
@@ -613,9 +615,19 @@ function molitParamVariants(params) {
 }
 
 function normalizeItems(data) {
-  const item = data?.response?.body?.items?.item;
-  if (Array.isArray(item)) return item;
-  if (item && typeof item === "object") return [item];
+  const candidates = [
+    data?.response?.body?.items?.item,
+    data?.response?.body?.items,
+    data?.body?.items?.item,
+    data?.body?.items,
+    data?.items?.item,
+    data?.items,
+    data?.item,
+  ];
+  for (const item of candidates) {
+    if (Array.isArray(item)) return item;
+    if (item && typeof item === "object") return [item];
+  }
   return [];
 }
 
@@ -624,8 +636,8 @@ async function fetchPublicDataItems(endpoint, params, serviceKey, env, options =
   let last = "";
   for (const keyVariant of publicDataKeyVariants(serviceKey)) {
     const requestUrl = new URL(endpoint);
+    const keyName = options.serviceKeyName || "serviceKey";
     Object.entries({
-      serviceKey: keyVariant,
       ...params,
       numOfRows: String(options.numOfRows || params.numOfRows || "30"),
       pageNo: String(options.pageNo || params.pageNo || "1"),
@@ -633,6 +645,10 @@ async function fetchPublicDataItems(endpoint, params, serviceKey, env, options =
     }).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== "") requestUrl.searchParams.set(key, value);
     });
+    requestUrl.searchParams.set(keyName, keyVariant);
+    if (options.includeServiceKeyAlias) {
+      requestUrl.searchParams.set(keyName === "serviceKey" ? "ServiceKey" : "serviceKey", keyVariant);
+    }
     try {
       const response = await fetch(requestUrl.toString(), { headers: { Accept: "application/json" } });
       const text = await response.text();
@@ -644,7 +660,9 @@ async function fetchPublicDataItems(endpoint, params, serviceKey, env, options =
         const data = JSON.parse(text);
         const items = normalizeItems(data);
         if (items.length) return { items, log: "OK" };
-        last = `${data?.response?.header?.resultCode || "-"}: ${data?.response?.header?.resultMsg || "item 없음"}`;
+        const resultCode = data?.response?.header?.resultCode || data?.header?.resultCode || data?.resultCode || "-";
+        const resultMsg = data?.response?.header?.resultMsg || data?.header?.resultMsg || data?.resultMsg || "item 없음";
+        last = `${resultCode}: ${resultMsg}`;
       } catch {
         last = `응답 파싱 실패: ${maskSecretText(text.slice(0, 240), env)}`;
       }
@@ -659,7 +677,7 @@ async function fetchBuildingRegister(params, env) {
   const serviceKey = buildingHubKey(env);
   if (!serviceKey) return { record: null, log: "MOLIT_HUB_API_KEY, MOLIT_BUILDING_API_KEY 또는 DATA_GO_KR_API_KEY가 Worker Secret에 없습니다." };
   if (!params) return { record: null, log: "건축물대장 조회 파라미터를 만들지 못했습니다." };
-  let last = "";
+  const attempts = [];
   for (const paramSet of molitParamVariants(params)) {
     for (const endpoint of [MOLIT_HUB_ENDPOINTS.title, LEGACY_TITLE_ENDPOINT]) {
       const result = await fetchPublicDataItems(endpoint, {
@@ -670,10 +688,10 @@ async function fetchBuildingRegister(params, env) {
         ji: paramSet.ji,
       }, serviceKey, env, { numOfRows: "10" });
       if (result.items.length) return { record: result.items[0], params: paramSet, log: `건축물대장 표제부 조회 성공: ${paramSet.source}` };
-      last = `${result.log} (${paramSet.sigunguCd}/${paramSet.bjdongCd}/${paramSet.platGbCd}/${paramSet.bun}/${paramSet.ji})`;
+      attempts.push(`${result.log} (${paramSet.sigunguCd}/${paramSet.bjdongCd}/${paramSet.platGbCd}/${paramSet.bun}/${paramSet.ji})`);
     }
   }
-  return { record: null, log: `건축물대장 조회 실패: ${last}` };
+  return { record: null, params, log: `건축물대장 표제부 조회 결과 없음: ${attempts.slice(-3).join(" / ")}` };
 }
 
 async function fetchBuildingHubBundle(params, env) {
@@ -795,7 +813,7 @@ async function fetchCommercialContext(lon, lat, env) {
     cx: String(lon),
     cy: String(lat),
     type: "json",
-  }, serviceKey, env, { numOfRows: "100" });
+  }, serviceKey, env, { numOfRows: "100", serviceKeyName: "serviceKey", includeServiceKeyAlias: true });
   const summary = summarizeStores(result.items, radius);
   return {
     summary,
@@ -863,6 +881,15 @@ function autofillBuildingInfo(location, record) {
   return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== null && value !== undefined && value !== ""));
 }
 
+function fallbackRecordFromHub(hub) {
+  const records = hub?.records || {};
+  for (const key of ["basis", "recap_title", "floor", "expos_area"]) {
+    const rows = records[key] || [];
+    if (rows.length) return rows[0];
+  }
+  return null;
+}
+
 async function enrichCandidate(candidate, env) {
   const logs = [];
   const location = { ...(candidate || {}) };
@@ -889,7 +916,8 @@ async function enrichCandidate(candidate, env) {
   logs.push(...hub.logs);
   const commercial = await fetchCommercialContext(location.lon, location.lat, env);
   logs.push(commercial.log);
-  return { location, record: register.record, hub, commercial, logs };
+  const fallbackRecord = register.record || fallbackRecordFromHub(hub);
+  return { location, record: fallbackRecord, title_record_found: Boolean(register.record), hub, commercial, logs };
 }
 
 async function enrichForAutofill(payload, env) {
@@ -899,6 +927,7 @@ async function enrichForAutofill(payload, env) {
     building: autofillBuildingInfo(enriched.location, enriched.record),
     location: enriched.location,
     record_found: Boolean(enriched.record),
+    title_record_found: Boolean(enriched.title_record_found),
     hub_summary: enriched.hub?.summary || {},
     commercial_summary: enriched.commercial?.summary || null,
     logs: enriched.logs,
