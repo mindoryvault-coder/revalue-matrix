@@ -3,10 +3,21 @@ const VWORLD_SEARCH_URL = "https://api.vworld.kr/req/search";
 const VWORLD_DATA_URL = "https://api.vworld.kr/req/data";
 const KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json";
 const KAKAO_ADDRESS_URL = "https://dapi.kakao.com/v2/local/search/address.json";
-const MOLIT_ENDPOINTS = [
-  "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
-  "https://apis.data.go.kr/1613000/BldRgstService_v2/getBrTitleInfo",
-];
+const MOLIT_HUB_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService";
+const STORE_RADIUS_URL = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius";
+const MOLIT_HUB_ENDPOINTS = {
+  title: `${MOLIT_HUB_BASE}/getBrTitleInfo`,
+  basis: `${MOLIT_HUB_BASE}/getBrBasisOulnInfo`,
+  floor: `${MOLIT_HUB_BASE}/getBrFlrOulnInfo`,
+  expos_area: `${MOLIT_HUB_BASE}/getBrExposPubuseAreaInfo`,
+  house_price: `${MOLIT_HUB_BASE}/getBrHsprcInfo`,
+  expos: `${MOLIT_HUB_BASE}/getBrExposInfo`,
+  septic: `${MOLIT_HUB_BASE}/getBrWclfInfo`,
+  recap_title: `${MOLIT_HUB_BASE}/getBrRecapTitleInfo`,
+  attached_jibun: `${MOLIT_HUB_BASE}/getBrAtchJibunInfo`,
+  district: `${MOLIT_HUB_BASE}/getBrJijiguInfo`,
+};
+const LEGACY_TITLE_ENDPOINT = "https://apis.data.go.kr/1613000/BldRgstService_v2/getBrTitleInfo";
 
 export default {
   async fetch(request, env) {
@@ -34,7 +45,8 @@ async function handleRequest(request, env) {
       mode: "github-pages + cloudflare-worker",
       vworld: Boolean(env.VWORLD_API_KEY),
       kakao: Boolean(env.KAKAO_REST_API_KEY),
-      molit: Boolean(env.MOLIT_BUILDING_API_KEY || env.DATA_GO_KR_API_KEY),
+      molit: Boolean(env.MOLIT_HUB_API_KEY || env.MOLIT_BUILDING_API_KEY || env.DATA_GO_KR_API_KEY),
+      store: Boolean(env.STORE_API_KEY || env.SEMAS_STORE_API_KEY || env.DATA_GO_KR_API_KEY),
       site_token: Boolean(env.SITE_ACCESS_TOKEN),
     }, 200, request, env);
   }
@@ -194,7 +206,10 @@ function maskSecretText(text, env) {
     env?.SITE_ACCESS_TOKEN,
     env?.VWORLD_API_KEY,
     env?.KAKAO_REST_API_KEY,
+    env?.MOLIT_HUB_API_KEY,
     env?.MOLIT_BUILDING_API_KEY,
+    env?.STORE_API_KEY,
+    env?.SEMAS_STORE_API_KEY,
     env?.DATA_GO_KR_API_KEY,
   ]) {
     if (value && String(value).length >= 6) out = out.replaceAll(String(value), "***");
@@ -575,6 +590,14 @@ function publicDataKeyVariants(serviceKey) {
   return values;
 }
 
+function buildingHubKey(env) {
+  return env.MOLIT_HUB_API_KEY || env.MOLIT_BUILDING_API_KEY || env.DATA_GO_KR_API_KEY || "";
+}
+
+function storeApiKey(env) {
+  return env.STORE_API_KEY || env.SEMAS_STORE_API_KEY || env.DATA_GO_KR_API_KEY || "";
+}
+
 function molitParamVariants(params) {
   if (!params) return [];
   const variants = [params];
@@ -589,49 +612,196 @@ function molitParamVariants(params) {
   });
 }
 
+function normalizeItems(data) {
+  const item = data?.response?.body?.items?.item;
+  if (Array.isArray(item)) return item;
+  if (item && typeof item === "object") return [item];
+  return [];
+}
+
+async function fetchPublicDataItems(endpoint, params, serviceKey, env, options = {}) {
+  if (!serviceKey) return { items: [], log: "공공데이터 서비스키가 없습니다." };
+  let last = "";
+  for (const keyVariant of publicDataKeyVariants(serviceKey)) {
+    const requestUrl = new URL(endpoint);
+    Object.entries({
+      serviceKey: keyVariant,
+      ...params,
+      numOfRows: String(options.numOfRows || params.numOfRows || "30"),
+      pageNo: String(options.pageNo || params.pageNo || "1"),
+      _type: "json",
+    }).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") requestUrl.searchParams.set(key, value);
+    });
+    try {
+      const response = await fetch(requestUrl.toString(), { headers: { Accept: "application/json" } });
+      const text = await response.text();
+      if (!response.ok) {
+        last = `HTTP ${response.status}: ${maskSecretText(text.slice(0, 240), env)}`;
+        continue;
+      }
+      try {
+        const data = JSON.parse(text);
+        const items = normalizeItems(data);
+        if (items.length) return { items, log: "OK" };
+        last = `${data?.response?.header?.resultCode || "-"}: ${data?.response?.header?.resultMsg || "item 없음"}`;
+      } catch {
+        last = `응답 파싱 실패: ${maskSecretText(text.slice(0, 240), env)}`;
+      }
+    } catch (error) {
+      last = maskSecretText(String(error), env);
+    }
+  }
+  return { items: [], log: last || "조회 결과 없음" };
+}
+
 async function fetchBuildingRegister(params, env) {
-  const serviceKey = env.MOLIT_BUILDING_API_KEY || env.DATA_GO_KR_API_KEY;
-  if (!serviceKey) return { record: null, log: "MOLIT_BUILDING_API_KEY 또는 DATA_GO_KR_API_KEY가 Worker Secret에 없습니다." };
+  const serviceKey = buildingHubKey(env);
+  if (!serviceKey) return { record: null, log: "MOLIT_HUB_API_KEY, MOLIT_BUILDING_API_KEY 또는 DATA_GO_KR_API_KEY가 Worker Secret에 없습니다." };
   if (!params) return { record: null, log: "건축물대장 조회 파라미터를 만들지 못했습니다." };
   let last = "";
   for (const paramSet of molitParamVariants(params)) {
-    for (const endpoint of MOLIT_ENDPOINTS) {
-      for (const keyVariant of publicDataKeyVariants(serviceKey)) {
-        const requestUrl = new URL(endpoint);
-        Object.entries({
-          serviceKey: keyVariant,
-          sigunguCd: paramSet.sigunguCd,
-          bjdongCd: paramSet.bjdongCd,
-          platGbCd: paramSet.platGbCd,
-          bun: paramSet.bun,
-          ji: paramSet.ji,
-          numOfRows: "10",
-          pageNo: "1",
-          _type: "json",
-        }).forEach(([key, value]) => requestUrl.searchParams.set(key, value));
-        try {
-          const response = await fetch(requestUrl.toString(), { headers: { Accept: "application/json" } });
-          const text = await response.text();
-          if (!response.ok) {
-            last = `HTTP ${response.status}: ${maskSecretText(text.slice(0, 240), env)}`;
-            continue;
-          }
-          try {
-            const data = JSON.parse(text);
-            const item = data?.response?.body?.items?.item;
-            if (Array.isArray(item) && item.length) return { record: item[0], log: `건축물대장 조회 성공: ${paramSet.source}` };
-            if (item && typeof item === "object") return { record: item, log: `건축물대장 조회 성공: ${paramSet.source}` };
-            last = `${data?.response?.header?.resultCode || "-"}: ${data?.response?.header?.resultMsg || "item 없음"} (${paramSet.sigunguCd}/${paramSet.bjdongCd}/${paramSet.platGbCd}/${paramSet.bun}/${paramSet.ji})`;
-          } catch {
-            last = `건축물대장 응답 파싱 실패: ${maskSecretText(text.slice(0, 240), env)}`;
-          }
-        } catch (error) {
-          last = maskSecretText(String(error), env);
-        }
-      }
+    for (const endpoint of [MOLIT_HUB_ENDPOINTS.title, LEGACY_TITLE_ENDPOINT]) {
+      const result = await fetchPublicDataItems(endpoint, {
+        sigunguCd: paramSet.sigunguCd,
+        bjdongCd: paramSet.bjdongCd,
+        platGbCd: paramSet.platGbCd,
+        bun: paramSet.bun,
+        ji: paramSet.ji,
+      }, serviceKey, env, { numOfRows: "10" });
+      if (result.items.length) return { record: result.items[0], params: paramSet, log: `건축물대장 표제부 조회 성공: ${paramSet.source}` };
+      last = `${result.log} (${paramSet.sigunguCd}/${paramSet.bjdongCd}/${paramSet.platGbCd}/${paramSet.bun}/${paramSet.ji})`;
     }
   }
   return { record: null, log: `건축물대장 조회 실패: ${last}` };
+}
+
+async function fetchBuildingHubBundle(params, env) {
+  const serviceKey = buildingHubKey(env);
+  if (!serviceKey || !params) return { records: {}, summary: {}, logs: ["건축HUB 상세 조회를 건너뜁니다."] };
+  const baseParams = {
+    sigunguCd: params.sigunguCd,
+    bjdongCd: params.bjdongCd,
+    platGbCd: params.platGbCd,
+    bun: params.bun,
+    ji: params.ji,
+  };
+  const targets = [
+    ["basis", "기본개요", MOLIT_HUB_ENDPOINTS.basis, "10"],
+    ["floor", "층별개요", MOLIT_HUB_ENDPOINTS.floor, "80"],
+    ["expos_area", "전유공용면적", MOLIT_HUB_ENDPOINTS.expos_area, "80"],
+    ["house_price", "주택가격", MOLIT_HUB_ENDPOINTS.house_price, "30"],
+    ["expos", "전유부", MOLIT_HUB_ENDPOINTS.expos, "80"],
+    ["septic", "오수정화시설", MOLIT_HUB_ENDPOINTS.septic, "20"],
+    ["recap_title", "총괄표제부", MOLIT_HUB_ENDPOINTS.recap_title, "10"],
+    ["attached_jibun", "부속지번", MOLIT_HUB_ENDPOINTS.attached_jibun, "30"],
+    ["district", "지역지구구역", MOLIT_HUB_ENDPOINTS.district, "30"],
+  ];
+  const entries = await Promise.all(targets.map(async ([key, label, endpoint, rows]) => {
+    const result = await fetchPublicDataItems(endpoint, baseParams, serviceKey, env, { numOfRows: rows });
+    return [key, { label, items: result.items, log: result.items.length ? `${label} ${result.items.length}건` : `${label}: ${result.log}` }];
+  }));
+  const records = Object.fromEntries(entries.map(([key, value]) => [key, value.items]));
+  const logs = entries.map(([, value]) => value.log);
+  const summary = summarizeBuildingHub(records);
+  return { records, summary, logs };
+}
+
+function summarizeBuildingHub(records) {
+  const floorRows = records.floor || [];
+  const exposAreaRows = records.expos_area || [];
+  const priceRows = records.house_price || [];
+  const districtRows = records.district || [];
+  const septicRows = records.septic || [];
+  const uniqueFloors = new Set(floorRows.map((row) => pick(row, ["flrNoNm", "flrNo"])).filter(Boolean));
+  const floorArea = floorRows.reduce((sum, row) => sum + toNumber(pick(row, ["area", "면적"]), 0), 0);
+  const exclusiveArea = exposAreaRows
+    .filter((row) => /전유/.test(String(pick(row, ["exposPubuseGbCdNm", "전유공용구분코드명"]) || "")))
+    .reduce((sum, row) => sum + toNumber(pick(row, ["area", "면적"]), 0), 0);
+  const publicArea = exposAreaRows
+    .filter((row) => /공용/.test(String(pick(row, ["exposPubuseGbCdNm", "전유공용구분코드명"]) || "")))
+    .reduce((sum, row) => sum + toNumber(pick(row, ["area", "면적"]), 0), 0);
+  const prices = priceRows.map((row) => toNumber(pick(row, ["hsprc", "주택가격"]), 0)).filter((value) => value > 0);
+  const districtNames = [...new Set(districtRows.map((row) => pick(row, ["jijiguCdNm", "지역지구구역명", "etcJijigu"])).filter(Boolean))];
+  return {
+    floor_count_rows: floorRows.length,
+    unique_floor_labels: uniqueFloors.size,
+    floor_area_sum: Math.round(floorArea * 10) / 10,
+    exclusive_area_sum: Math.round(exclusiveArea * 10) / 10,
+    public_area_sum: Math.round(publicArea * 10) / 10,
+    unit_count: (records.expos || []).length,
+    house_price_avg: prices.length ? Math.round(avg(prices)) : null,
+    district_names: districtNames.slice(0, 8),
+    septic_found: septicRows.length > 0,
+    attached_jibun_count: (records.attached_jibun || []).length,
+  };
+}
+
+function commercialCategory(row) {
+  const lcls = String(pick(row, ["indsLclsNm", "상권업종대분류명"]) || "");
+  const mcls = String(pick(row, ["indsMclsNm", "상권업종중분류명"]) || "");
+  const scls = String(pick(row, ["indsSclsNm", "상권업종소분류명"]) || "");
+  return `${lcls} ${mcls} ${scls}`.trim();
+}
+
+function summarizeStores(items, radius) {
+  const categories = new Map();
+  let food = 0;
+  let cafe = 0;
+  let culture = 0;
+  let retail = 0;
+  let service = 0;
+  let education = 0;
+  for (const row of items) {
+    const category = commercialCategory(row);
+    if (category) categories.set(category, (categories.get(category) || 0) + 1);
+    if (/음식|한식|중식|일식|양식|분식|주점|제과|커피|카페|음료/.test(category)) food += 1;
+    if (/커피|카페|음료|디저트|제과/.test(category)) cafe += 1;
+    if (/문화|예술|공연|전시|스포츠|여가|오락/.test(category)) culture += 1;
+    if (/소매|편의점|슈퍼|생활|의류|화장품|서점|문구/.test(category)) retail += 1;
+    if (/서비스|수리|미용|세탁|부동산|의료|병원/.test(category)) service += 1;
+    if (/교육|학원|교습/.test(category)) education += 1;
+  }
+  const topCategories = [...categories.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, count]) => ({ name, count }));
+  const count = items.length;
+  const diversity = categories.size;
+  return {
+    radius_m: radius,
+    store_count: count,
+    category_count: diversity,
+    food_count: food,
+    cafe_count: cafe,
+    culture_count: culture,
+    retail_count: retail,
+    service_count: service,
+    education_count: education,
+    top_categories: topCategories,
+    density_score: count ? clamp(2 + count / 25, 1, 5) : 2.4,
+    diversity_score: diversity ? clamp(2 + diversity / 6, 1, 5) : 2.4,
+    culture_lifestyle_score: clamp(2.5 + (culture + cafe + education) / 12, 1, 5),
+  };
+}
+
+async function fetchCommercialContext(lon, lat, env) {
+  const serviceKey = storeApiKey(env);
+  if (!serviceKey) return { summary: null, items: [], log: "STORE_API_KEY 또는 SEMAS_STORE_API_KEY가 Worker Secret에 없습니다." };
+  if (lon === null || lat === null) return { summary: null, items: [], log: "좌표가 없어 상권 조회를 건너뜁니다." };
+  const radius = 500;
+  const result = await fetchPublicDataItems(STORE_RADIUS_URL, {
+    radius: String(radius),
+    cx: String(lon),
+    cy: String(lat),
+    type: "json",
+  }, serviceKey, env, { numOfRows: "100" });
+  const summary = summarizeStores(result.items, radius);
+  return {
+    summary,
+    items: result.items.slice(0, 20),
+    log: result.items.length ? `상권정보 ${radius}m 반경 ${result.items.length}건 조회` : `상권정보 조회 실패: ${result.log}`,
+  };
 }
 
 function mapUse(raw) {
@@ -715,7 +885,11 @@ async function enrichCandidate(candidate, env) {
   }
   const register = await fetchBuildingRegister(molitParams, env);
   logs.push(register.log);
-  return { location, record: register.record, logs };
+  const hub = await fetchBuildingHubBundle(register.params || molitParams, env);
+  logs.push(...hub.logs);
+  const commercial = await fetchCommercialContext(location.lon, location.lat, env);
+  logs.push(commercial.log);
+  return { location, record: register.record, hub, commercial, logs };
 }
 
 async function enrichForAutofill(payload, env) {
@@ -725,6 +899,8 @@ async function enrichForAutofill(payload, env) {
     building: autofillBuildingInfo(enriched.location, enriched.record),
     location: enriched.location,
     record_found: Boolean(enriched.record),
+    hub_summary: enriched.hub?.summary || {},
+    commercial_summary: enriched.commercial?.summary || null,
     logs: enriched.logs,
   };
 }
@@ -746,6 +922,8 @@ function mergeBuildingInfo(candidate, record, manual) {
     current_status: "공실",
     structure_system: "",
     pnu: candidate.pnu || "",
+    hub_summary: candidate.hub_summary || {},
+    commercial_summary: candidate.commercial_summary || null,
   };
   Object.assign(info, normalized);
   Object.entries(manual || {}).forEach(([key, value]) => {
@@ -827,6 +1005,40 @@ function inferData(buildingInfo, overrides) {
       marketability: scoreFrom(overrides, "marketability", 3.5),
     },
   };
+  return applyContextSignals(data, buildingInfo);
+}
+
+function applyContextSignals(data, buildingInfo) {
+  const commercial = buildingInfo.commercial_summary || {};
+  const hub = buildingInfo.hub_summary || {};
+  if (commercial.store_count !== undefined) {
+    const density = toNumber(commercial.density_score, 3);
+    const diversity = toNumber(commercial.diversity_score, 3);
+    const culture = toNumber(commercial.culture_lifestyle_score, 3);
+    data.regional.pedestrian_flow = Math.max(data.regional.pedestrian_flow, density);
+    data.regional.nearby_facilities = Math.max(data.regional.nearby_facilities, diversity);
+    data.social.resident_demand = Math.max(data.social.resident_demand, avg([density, diversity, culture]));
+    data.economic.operation_profit = Math.max(data.economic.operation_profit, avg([density, diversity]));
+    data.economic.marketability = Math.max(data.economic.marketability, avg([density, diversity, culture]));
+  }
+  if (hub.floor_area_sum) {
+    data.physical.plan_flexibility = Math.max(data.physical.plan_flexibility, hub.unique_floor_labels >= 3 ? 3.8 : 3.3);
+  }
+  if (hub.public_area_sum && hub.exclusive_area_sum) {
+    const commonRatio = hub.public_area_sum / Math.max(hub.exclusive_area_sum, 1);
+    if (commonRatio >= 0.25) data.spatial.circulation = Math.max(data.spatial.circulation, 3.8);
+  }
+  if (hub.house_price_avg) {
+    data.economic.marketability = Math.max(data.economic.marketability, 3.7);
+  }
+  if ((hub.district_names || []).some((name) => /상업|준주거|중심/.test(String(name)))) {
+    data.regional.pedestrian_flow = Math.max(data.regional.pedestrian_flow, 4);
+    data.economic.operation_profit = Math.max(data.economic.operation_profit, 4);
+  }
+  if ((hub.district_names || []).some((name) => /보전|자연|녹지|경관|문화재/.test(String(name)))) {
+    data.identity.code_barrier = Math.min(data.identity.code_barrier, 2.8);
+  }
+  return data;
 }
 
 const AXIS_WEIGHTS = {
@@ -888,10 +1100,15 @@ function recommendPrograms(localNeeds, data, buildingInfo) {
   if (data.physical.ceiling_height >= 4) programs.push("전시장", "메이커스페이스", "창고형 문화공간");
   if (data.spatial.rooftop_potential >= 4) programs.push("옥상정원", "야외 영화관", "도시농업 공간");
   if (["공장", "창고"].includes(buildingInfo.previous_use)) programs.push("로컬 제작소", "복합문화 창고", "공유 작업장");
+  const commercial = buildingInfo.commercial_summary || {};
+  if (commercial.cafe_count >= 3) programs.push("카페 연계형 커뮤니티 라운지", "로컬 브랜드 팝업");
+  if (commercial.culture_count >= 2) programs.push("전시·공연 연계형 재생거점");
+  if (commercial.retail_count >= 5) programs.push("소규모 로컬마켓", "생활상권 편의거점");
+  if (commercial.education_count >= 2) programs.push("방과후 학습·메이커 교육 공간");
   return [...new Set(programs)].slice(0, 8);
 }
 
-function extractRisks(data) {
+function extractRisks(data, buildingInfo = {}) {
   const risks = [];
   if (data.physical.structure_condition <= 2.5) risks.push("구조 보강 또는 정밀 안전진단 필요");
   if (data.physical.facility_condition <= 2.5) risks.push("전기·기계·위생 설비 교체 필요");
@@ -899,10 +1116,14 @@ function extractRisks(data) {
   if (data.spatial.circulation <= 2.5) risks.push("내부 동선 재구성 필요");
   if (data.economic.budget_level <= 2.5) risks.push("예산 부족으로 단계적 재생 전략 필요");
   if (data.identity.code_barrier <= 2.5) risks.push("용도변경, 피난, 소방, 접근성 기준 사전 검토 필요");
+  const hub = buildingInfo.hub_summary || {};
+  const commercial = buildingInfo.commercial_summary || {};
+  if ((hub.district_names || []).some((name) => /보전|자연|녹지|경관|문화재/.test(String(name)))) risks.push("지역지구구역 조건상 개발 강도와 용도변경 검토 필요");
+  if (commercial.store_count !== undefined && commercial.store_count < 8) risks.push("반경 500m 생활상권 밀도가 낮아 운영 프로그램의 목적지화 전략 필요");
   return risks.length ? risks : ["치명적 위험 요소는 낮음"];
 }
 
-function extractPotentials(data) {
+function extractPotentials(data, buildingInfo = {}) {
   const potentials = [];
   if (data.physical.structure_condition >= 4) potentials.push("기존 구조체 재사용 가능성 높음");
   if (data.physical.ceiling_height >= 4) potentials.push("높은 층고로 다양한 프로그램 수용 가능");
@@ -912,6 +1133,12 @@ function extractPotentials(data) {
   if (data.social.resident_demand >= 4) potentials.push("주민 수요 기반 운영 가능성 있음");
   if (data.environmental.material_reuse >= 4) potentials.push("재료 재사용을 통한 환경적 재생 가치 높음");
   if (data.identity.heritage_value >= 4) potentials.push("건물의 기억과 지역 서사를 공간 브랜드로 전환 가능");
+  const hub = buildingInfo.hub_summary || {};
+  const commercial = buildingInfo.commercial_summary || {};
+  if (hub.public_area_sum >= 100) potentials.push("공용면적을 커뮤니티 동선과 공유 프로그램으로 재편할 여지 있음");
+  if ((hub.district_names || []).some((name) => /상업|준주거|중심/.test(String(name)))) potentials.push("지역지구구역상 상업·복합 프로그램 전환 가능성 검토 가치 있음");
+  if (commercial.store_count >= 20) potentials.push(`반경 ${commercial.radius_m || 500}m 상가 ${commercial.store_count}건 기반의 생활상권 연계 가능`);
+  if (commercial.category_count >= 8) potentials.push("주변 업종 다양도가 높아 복합문화·편의 프로그램 실험에 유리");
   return potentials.length ? potentials : ["추가 현장조사를 통해 잠재 요소 발굴 필요"];
 }
 
@@ -1068,12 +1295,14 @@ function roadmap(strategies, cost) {
 async function analyzeBuilding(payload, env) {
   const enriched = await enrichCandidate(payload.candidate || {}, env);
   const building = mergeBuildingInfo(enriched.location, enriched.record, payload.manual || {});
+  building.hub_summary = enriched.hub?.summary || {};
+  building.commercial_summary = enriched.commercial?.summary || null;
   const data = inferData(building, payload.scores || {});
   const scoreResult = calculateScores(data, building);
   const types = classifyTypes(scoreResult.scores, data);
   const programs = recommendPrograms(payload.local_needs || [], data, building);
-  const risks = extractRisks(data);
-  const potentials = extractPotentials(data);
+  const risks = extractRisks(data, building);
+  const potentials = extractPotentials(data, building);
   const strategies = priorityStrategies(types, risks);
   const cost = estimateCost(data, building, scoreResult.total, types);
   const comparison = compareApproaches(data, building, scoreResult.total, cost);
@@ -1090,6 +1319,10 @@ async function analyzeBuilding(payload, env) {
     risks,
     potentials,
     strategies,
+    data_sources: {
+      building_hub: building.hub_summary || {},
+      commercial_area: building.commercial_summary || null,
+    },
     cost,
     comparison,
     modules: modules(data, building, types, programs, cost, comparison),
