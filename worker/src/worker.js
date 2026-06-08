@@ -511,6 +511,42 @@ function molitParamsFromPnu(pnu) {
   };
 }
 
+function molitParamsFromKakaoAddress(addressObject) {
+  const bCode = String(addressObject?.b_code || "").trim();
+  const mainNo = String(addressObject?.main_address_no || "").trim();
+  const subNo = String(addressObject?.sub_address_no || "0").trim();
+  if (!/^\d{10}$/.test(bCode) || !mainNo) return null;
+  return {
+    source: "kakao_address_code",
+    sigunguCd: bCode.slice(0, 5),
+    bjdongCd: bCode.slice(5, 10),
+    platGbCd: String(addressObject?.mountain_yn || "").toUpperCase() === "Y" ? "1" : "0",
+    bun: mainNo.padStart(4, "0"),
+    ji: (subNo || "0").padStart(4, "0"),
+  };
+}
+
+async function kakaoAddressMolitParams(address, env) {
+  const query = String(address || "").trim();
+  if (!query) return { params: null, log: "카카오 주소 보조 파싱을 건너뜁니다: 주소가 비었습니다." };
+  if (!env.KAKAO_REST_API_KEY) return { params: null, log: "카카오 주소 보조 파싱을 건너뜁니다: KAKAO_REST_API_KEY가 없습니다." };
+  const { status, data } = await fetchJson(KAKAO_ADDRESS_URL, {
+    query,
+    size: "1",
+  }, env, {
+    retries: 1,
+    retryDelayMs: 250,
+    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
+  });
+  if (status !== 200 || !Array.isArray(data?.documents) || !data.documents.length) {
+    return { params: null, log: `카카오 주소 보조 파싱 실패: HTTP ${status}` };
+  }
+  const params = molitParamsFromKakaoAddress(data.documents[0].address);
+  return params
+    ? { params, log: "카카오 주소 보조 파싱 성공" }
+    : { params: null, log: "카카오 주소 응답에서 법정동/지번 코드를 찾지 못했습니다." };
+}
+
 function parseAddressForMolit(address, env) {
   if (!address) return null;
   const match = String(address).match(/(\d+)(?:[-번지\s]+(\d+))?/);
@@ -525,42 +561,71 @@ function parseAddressForMolit(address, env) {
   };
 }
 
+function publicDataKeyVariants(serviceKey) {
+  const values = [String(serviceKey || "").trim()].filter(Boolean);
+  try {
+    const decoded = decodeURIComponent(values[0]);
+    if (decoded && !values.includes(decoded)) values.push(decoded);
+  } catch {
+    // 이미 디코딩된 키이거나 잘못 인코딩된 값이면 원본만 사용합니다.
+  }
+  return values;
+}
+
+function molitParamVariants(params) {
+  if (!params) return [];
+  const variants = [params];
+  const altPlatGbCd = params.platGbCd === "1" ? "0" : "1";
+  variants.push({ ...params, source: `${params.source}_alt_plat`, platGbCd: altPlatGbCd });
+  const seen = new Set();
+  return variants.filter((item) => {
+    const key = `${item.sigunguCd}|${item.bjdongCd}|${item.platGbCd}|${item.bun}|${item.ji}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function fetchBuildingRegister(params, env) {
   const serviceKey = env.MOLIT_BUILDING_API_KEY || env.DATA_GO_KR_API_KEY;
   if (!serviceKey) return { record: null, log: "MOLIT_BUILDING_API_KEY 또는 DATA_GO_KR_API_KEY가 Worker Secret에 없습니다." };
   if (!params) return { record: null, log: "건축물대장 조회 파라미터를 만들지 못했습니다." };
   let last = "";
-  for (const endpoint of MOLIT_ENDPOINTS) {
-    const requestUrl = new URL(endpoint);
-    Object.entries({
-      serviceKey,
-      sigunguCd: params.sigunguCd,
-      bjdongCd: params.bjdongCd,
-      platGbCd: params.platGbCd,
-      bun: params.bun,
-      ji: params.ji,
-      numOfRows: "10",
-      pageNo: "1",
-      _type: "json",
-    }).forEach(([key, value]) => requestUrl.searchParams.set(key, value));
-    try {
-      const response = await fetch(requestUrl.toString(), { headers: { Accept: "application/json" } });
-      const text = await response.text();
-      if (!response.ok) {
-        last = `HTTP ${response.status}: ${maskSecretText(text.slice(0, 240), env)}`;
-        continue;
+  for (const paramSet of molitParamVariants(params)) {
+    for (const endpoint of MOLIT_ENDPOINTS) {
+      for (const keyVariant of publicDataKeyVariants(serviceKey)) {
+        const requestUrl = new URL(endpoint);
+        Object.entries({
+          serviceKey: keyVariant,
+          sigunguCd: paramSet.sigunguCd,
+          bjdongCd: paramSet.bjdongCd,
+          platGbCd: paramSet.platGbCd,
+          bun: paramSet.bun,
+          ji: paramSet.ji,
+          numOfRows: "10",
+          pageNo: "1",
+          _type: "json",
+        }).forEach(([key, value]) => requestUrl.searchParams.set(key, value));
+        try {
+          const response = await fetch(requestUrl.toString(), { headers: { Accept: "application/json" } });
+          const text = await response.text();
+          if (!response.ok) {
+            last = `HTTP ${response.status}: ${maskSecretText(text.slice(0, 240), env)}`;
+            continue;
+          }
+          try {
+            const data = JSON.parse(text);
+            const item = data?.response?.body?.items?.item;
+            if (Array.isArray(item) && item.length) return { record: item[0], log: `건축물대장 조회 성공: ${paramSet.source}` };
+            if (item && typeof item === "object") return { record: item, log: `건축물대장 조회 성공: ${paramSet.source}` };
+            last = `${data?.response?.header?.resultCode || "-"}: ${data?.response?.header?.resultMsg || "item 없음"} (${paramSet.sigunguCd}/${paramSet.bjdongCd}/${paramSet.platGbCd}/${paramSet.bun}/${paramSet.ji})`;
+          } catch {
+            last = `건축물대장 응답 파싱 실패: ${maskSecretText(text.slice(0, 240), env)}`;
+          }
+        } catch (error) {
+          last = maskSecretText(String(error), env);
+        }
       }
-      try {
-        const data = JSON.parse(text);
-        const item = data?.response?.body?.items?.item;
-        if (Array.isArray(item) && item.length) return { record: item[0], log: `건축물대장 조회 성공: ${params.source}` };
-        if (item && typeof item === "object") return { record: item, log: `건축물대장 조회 성공: ${params.source}` };
-        last = `${data?.response?.header?.resultCode || "-"}: ${data?.response?.header?.resultMsg || "item 없음"}`;
-      } catch {
-        last = "건축물대장 응답 파싱 실패";
-      }
-    } catch (error) {
-      last = maskSecretText(String(error), env);
     }
   }
   return { record: null, log: `건축물대장 조회 실패: ${last}` };
@@ -614,7 +679,15 @@ async function enrichCandidate(candidate, env) {
   const pnuResult = await fetchPnu(location.lon, location.lat, env);
   logs.push(pnuResult.log);
   if (pnuResult.pnu) location.pnu = pnuResult.pnu;
-  const molitParams = molitParamsFromPnu(pnuResult.pnu) || parseAddressForMolit(location.parcel_address || location.address || "", env);
+  let molitParams = molitParamsFromPnu(pnuResult.pnu);
+  if (!molitParams) {
+    const kakaoParams = await kakaoAddressMolitParams(location.parcel_address || location.address || location.road_address || "", env);
+    logs.push(kakaoParams.log);
+    molitParams = kakaoParams.params;
+  }
+  if (!molitParams) {
+    molitParams = parseAddressForMolit(location.parcel_address || location.address || "", env);
+  }
   const register = await fetchBuildingRegister(molitParams, env);
   logs.push(register.log);
   return { location, record: register.record, logs };
