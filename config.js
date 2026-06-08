@@ -2,7 +2,7 @@
 // 1. GitHub Pages 배포 후 Cloudflare Worker 주소를 아래에 넣으세요.
 // 2. 예: https://revalue-matrix-api.your-subdomain.workers.dev
 // 3. github.io 주소를 넣으면 검색/분석 API가 작동하지 않습니다.
-window.REVALUE_API_BASE = "";
+window.REVALUE_API_BASE = "https://revalue-matrix.mindoryvault.workers.dev";
 
 // 선택 사항입니다.
 // 여기에 접속 코드를 넣으면 사용자가 코드를 따로 입력하지 않아도 됩니다.
