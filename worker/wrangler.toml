@@ -1,4 +1,4 @@
-name = "revalue-matrix"
+name = "revalue-matrix-api"
 main = "src/worker.js"
 compatibility_date = "2026-06-08"
 
@@ -8,4 +8,4 @@ enabled = true
 [vars]
 MOLIT_SIGUNGU_CD = ""
 MOLIT_BJDONG_CD = ""
-ALLOWED_ORIGINS = "https://mindoryvault-coder.github.io"
+ALLOWED_ORIGINS = "https://mindoryvault-coder.github.io" # ◀ 정확히 이렇게 수정
