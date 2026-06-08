@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RE:VALUE MATRIX</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="accessOverlay" class="access-overlay hidden">
+    <div class="access-card">
+      <div class="brand compact-brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <strong>RE:VALUE</strong>
+          <span>MATRIX</span>
+        </div>
+      </div>
+      <h2>접속 코드</h2>
+      <p>분석 기능을 사용하려면 공유받은 접속 코드를 입력하세요.</p>
+      <input id="accessTokenInput" type="password" placeholder="접속 코드">
+      <button id="accessTokenBtn" type="button">입장</button>
+      <p id="accessHint" class="status-line"></p>
+    </div>
+  </div>
+
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <strong>RE:VALUE</strong>
+          <span>MATRIX</span>
+        </div>
+      </div>
+
+      <section class="panel compact">
+        <div class="panel-head">
+          <h2>분석 흐름</h2>
+        </div>
+        <ol class="flow-list">
+          <li><strong>검색</strong><span>건물명이나 주소 입력</span></li>
+          <li><strong>선택</strong><span>가장 가까운 후보 확인</span></li>
+          <li><strong>분석</strong><span>재생 가능성과 경제성 도출</span></li>
+        </ol>
+      </section>
+
+      <section class="panel compact">
+        <div class="panel-head">
+          <h2>지역 수요</h2>
+        </div>
+        <div id="needsBox" class="checks"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Architecture Regeneration Decision Tool</p>
+          <h1>건물명이나 주소 하나로 재생 가능성을 빠르게 읽는 웹사이트</h1>
+        </div>
+        <div class="top-stats">
+          <div><span>5대 관점</span><strong>재료·맥락·구조·경제·설계</strong></div>
+          <div><span>결과 구성</span><strong>전략·비용·로드맵</strong></div>
+        </div>
+      </header>
+
+      <section class="search-band">
+        <div class="search-box">
+          <input id="queryInput" type="search" placeholder="예: 서울시청 / 송파구 올림픽로 300 / 성수동 공장">
+          <button id="searchBtn" type="button">검색</button>
+        </div>
+        <p id="searchStatus" class="status-line">VWorld 후보 검색 후 하나를 선택하면 건축재생 분석이 이어집니다.</p>
+      </section>
+
+      <section class="grid two">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>검색 후보</h2>
+            <span id="candidateCount" class="badge">0개</span>
+          </div>
+          <div id="candidateList" class="candidate-list empty">검색 결과가 여기에 표시됩니다.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>건물 정보 보정</h2>
+            <span class="badge muted">선택 사항</span>
+          </div>
+          <div class="form-grid">
+            <label>건물명<input id="manualBuildingName" type="text"></label>
+            <label>주소<input id="manualAddress" type="text"></label>
+            <label>기존 용도
+              <select id="manualUse">
+                <option>기타</option>
+                <option>상가</option>
+                <option>주거</option>
+                <option>업무시설</option>
+                <option>공장</option>
+                <option>창고</option>
+                <option>학교</option>
+                <option>문화시설</option>
+                <option>공공시설</option>
+              </select>
+            </label>
+            <label>현재 상태
+              <select id="manualStatus">
+                <option>공실</option>
+                <option>정상 사용</option>
+                <option>부분 사용</option>
+                <option>폐쇄</option>
+                <option>방치</option>
+              </select>
+            </label>
+            <label>준공연도<input id="manualYear" type="number" min="1900" max="2026" placeholder="예: 1988"></label>
+            <label>층수<input id="manualFloors" type="number" min="1" max="80" placeholder="예: 4"></label>
+            <label>연면적(㎡)<input id="manualArea" type="number" min="1" step="1" placeholder="예: 850"></label>
+            <label>대지면적(㎡)<input id="manualLandArea" type="number" min="1" step="1" placeholder="자동 조회"></label>
+            <label>주요 구조<input id="manualStructure" type="text" placeholder="철근콘크리트 등"></label>
+            <label>지번코드(PNU)<input id="manualPnu" type="text" placeholder="자동 조회"></label>
+          </div>
+          <p id="autoFillStatus" class="status-line">후보를 선택하면 공공데이터 기반 건물 정보가 자동으로 보정됩니다.</p>
+          <button id="analyzeBtn" class="primary wide" type="button">이 조건으로 분석</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>간편 진단 보정</h2>
+          <span class="badge muted">1 낮음 · 5 높음</span>
+        </div>
+        <div id="scoreControls" class="slider-grid"></div>
+      </section>
+
+      <section id="results" class="results hidden">
+        <div class="result-hero">
+          <div>
+            <p class="eyebrow">Regeneration Readout</p>
+            <h2 id="resultTitle">분석 결과</h2>
+            <p id="decisionText"></p>
+          </div>
+          <div class="score-orb">
+            <strong id="totalScore">-</strong>
+            <span id="gradeText">-</span>
+          </div>
+        </div>
+
+        <div class="metric-grid">
+          <div class="metric"><span>예상 기준 사업비</span><strong id="costMetric">-</strong></div>
+          <div class="metric"><span>순공사비 기준 회수기간</span><strong id="paybackMetric">-</strong></div>
+          <div class="metric"><span>재생 디자인 수익 증가</span><strong id="growthMetric">-</strong></div>
+          <div class="metric"><span>우선 판단</span><strong id="decisionMetric">-</strong></div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head"><h2>데이터 근거</h2></div>
+          <div id="dataSourceCards" class="module-grid"></div>
+        </section>
+
+        <section class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h2>평가축</h2></div>
+            <div id="axisBars" class="axis-bars"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>5년 현금흐름</h2></div>
+            <canvas id="projectionChart" width="640" height="340"></canvas>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>건축재생 6대 모듈</h2></div>
+          <div id="moduleCards" class="module-grid"></div>
+        </section>
+
+        <section class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h2>보수 vs 건축재생</h2></div>
+            <div id="comparisonTable" class="table"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>실행 로드맵</h2></div>
+            <div id="roadmapList" class="roadmap"></div>
+          </div>
+        </section>
+
+        <section class="grid three">
+          <div class="panel">
+            <div class="panel-head"><h2>재생 유형</h2></div>
+            <div id="typeTags" class="tags"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>추천 프로그램</h2></div>
+            <ul id="programList" class="clean-list"></ul>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>리스크·잠재력</h2></div>
+            <ul id="riskList" class="clean-list"></ul>
+          </div>
+        </section>
+
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
