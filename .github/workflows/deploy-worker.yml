@@ -23,19 +23,32 @@ jobs:
       - name: Create Worker secrets file
         working-directory: worker
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SITE_ACCESS_TOKEN: ${{ secrets.SITE_ACCESS_TOKEN }}
           VWORLD_API_KEY: ${{ secrets.VWORLD_API_KEY }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           MOLIT_BUILDING_API_KEY: ${{ secrets.MOLIT_BUILDING_API_KEY }}
           DATA_GO_KR_API_KEY: ${{ secrets.DATA_GO_KR_API_KEY }}
         run: |
           node - <<'NODE'
           const fs = require("fs");
-          const secrets = {
-            SITE_ACCESS_TOKEN: process.env.SITE_ACCESS_TOKEN || "",
-            VWORLD_API_KEY: process.env.VWORLD_API_KEY || "",
-            MOLIT_BUILDING_API_KEY: process.env.MOLIT_BUILDING_API_KEY || "",
-            DATA_GO_KR_API_KEY: process.env.DATA_GO_KR_API_KEY || "",
-          };
+          const required = [
+            "CLOUDFLARE_API_TOKEN",
+            "CLOUDFLARE_ACCOUNT_ID",
+            "SITE_ACCESS_TOKEN",
+            "VWORLD_API_KEY",
+          ];
+          const missing = required.filter((name) => !String(process.env[name] || "").trim());
+          if (missing.length) {
+            console.error(`Missing required GitHub Secrets: ${missing.join(", ")}`);
+            process.exit(1);
+          }
+          const secrets = {};
+          for (const name of ["SITE_ACCESS_TOKEN", "VWORLD_API_KEY", "KAKAO_REST_API_KEY", "MOLIT_BUILDING_API_KEY", "DATA_GO_KR_API_KEY"]) {
+            const value = String(process.env[name] || "").trim();
+            if (value) secrets[name] = value;
+          }
           fs.writeFileSync(".worker-secrets.json", JSON.stringify(secrets));
           NODE
 
