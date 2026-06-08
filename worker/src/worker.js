@@ -41,6 +41,9 @@ async function handleRequest(request, env) {
   if (url.pathname === "/api/search" && request.method === "GET") {
     return json(await searchBuildings(url.searchParams.get("q") || "", env), 200, request, env);
   }
+  if (url.pathname === "/api/enrich" && request.method === "POST") {
+    return json(await enrichForAutofill(await request.json(), env), 200, request, env);
+  }
   if (url.pathname === "/api/analyze" && request.method === "POST") {
     return json(await analyzeBuilding(await request.json(), env), 200, request, env);
   }
@@ -656,6 +659,7 @@ function normalizeRecord(record) {
   const useAprDay = pick(record, ["useAprDay", "사용승인일"]);
   const yearMatch = String(useAprDay || "").match(/(\d{4})/);
   const previousUse = pick(record, ["mainPurpsCdNm", "주용도코드명", "etcPurps", "기타용도"]);
+  const structure = pick(record, ["strctCdNm", "구조코드명", "etcStrct", "기타구조"]);
   const out = {
     building_name: pick(record, ["bldNm", "건물명"]),
     address: pick(record, ["platPlc", "대지위치", "newPlatPlc", "도로명대지위치"]),
@@ -663,9 +667,30 @@ function normalizeRecord(record) {
     year_built: yearMatch ? Number(yearMatch[1]) : null,
     floors: toInt(pick(record, ["grndFlrCnt", "지상층수"])),
     area: toNumber(pick(record, ["totArea", "연면적"])),
+    land_area: toNumber(pick(record, ["platArea", "대지면적"])),
+    structure_system: structure,
     raw: record,
   };
   return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== null && value !== ""));
+}
+
+function autofillBuildingInfo(location, record) {
+  const normalized = normalizeRecord(record);
+  const out = {
+    building_name: normalized.building_name || location.title || location.building_name || "",
+    address: normalized.address || location.road_address || location.parcel_address || location.address || "",
+    road_address: location.road_address || "",
+    parcel_address: location.parcel_address || "",
+    previous_use: normalized.previous_use || "",
+    year_built: normalized.year_built || "",
+    floors: normalized.floors || "",
+    area: normalized.area || "",
+    land_area: normalized.land_area || "",
+    structure_system: normalized.structure_system || "",
+    pnu: location.pnu || "",
+    record_found: Boolean(record),
+  };
+  return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== null && value !== undefined && value !== ""));
 }
 
 async function enrichCandidate(candidate, env) {
@@ -693,6 +718,17 @@ async function enrichCandidate(candidate, env) {
   return { location, record: register.record, logs };
 }
 
+async function enrichForAutofill(payload, env) {
+  const enriched = await enrichCandidate(payload.candidate || payload || {}, env);
+  return {
+    ok: true,
+    building: autofillBuildingInfo(enriched.location, enriched.record),
+    location: enriched.location,
+    record_found: Boolean(enriched.record),
+    logs: enriched.logs,
+  };
+}
+
 function mergeBuildingInfo(candidate, record, manual) {
   const normalized = normalizeRecord(record);
   const info = {
@@ -706,8 +742,10 @@ function mergeBuildingInfo(candidate, record, manual) {
     year_built: null,
     floors: null,
     area: null,
+    land_area: null,
     current_status: "공실",
     structure_system: "",
+    pnu: candidate.pnu || "",
   };
   Object.assign(info, normalized);
   Object.entries(manual || {}).forEach(([key, value]) => {
@@ -716,6 +754,7 @@ function mergeBuildingInfo(candidate, record, manual) {
   info.year_built = toInt(info.year_built, new Date().getFullYear() - 30);
   info.floors = toInt(info.floors, 3);
   info.area = Math.max(toNumber(info.area, 500), 1);
+  info.land_area = toNumber(info.land_area);
   info.lon = toNumber(info.lon);
   info.lat = toNumber(info.lat);
   info.record_found = Boolean(record);
