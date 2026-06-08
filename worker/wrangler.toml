@@ -8,4 +8,4 @@ enabled = true
 [vars]
 MOLIT_SIGUNGU_CD = ""
 MOLIT_BJDONG_CD = ""
-ALLOWED_ORIGINS = "https://mindoryvault-coder.github.io" # ◀ 정확히 이렇게 수정
+ALLOWED_ORIGINS = "https://mindoryvault-coder.github.io"

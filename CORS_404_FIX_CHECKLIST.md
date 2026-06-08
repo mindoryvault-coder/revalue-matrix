@@ -9,7 +9,7 @@ https://mindoryvault-coder.github.io
 현재 Cloudflare Worker 주소:
 
 ```text
-https://revalue-matrix.mindoryvault.workers.dev
+https://revalue-matrix-api.mindoryvault.workers.dev
 ```
 
 ## 1. config.js 확인
@@ -17,7 +17,7 @@ https://revalue-matrix.mindoryvault.workers.dev
 GitHub Pages에 올라가는 `config.js`에는 아래처럼 Worker 주소가 들어가야 합니다.
 
 ```js
-window.REVALUE_API_BASE = "https://revalue-matrix.mindoryvault.workers.dev";
+window.REVALUE_API_BASE = "https://revalue-matrix-api.mindoryvault.workers.dev";
 ```
 
 여기에 `github.io` 주소를 넣으면 검색 API가 작동하지 않습니다.
@@ -27,7 +27,7 @@ window.REVALUE_API_BASE = "https://revalue-matrix.mindoryvault.workers.dev";
 Worker 쪽 `worker/wrangler.toml`은 아래처럼 맞춥니다.
 
 ```toml
-name = "revalue-matrix"
+name = "revalue-matrix-api"
 main = "src/worker.js"
 compatibility_date = "2026-06-08"
 
@@ -37,14 +37,14 @@ MOLIT_SIGUNGU_CD = ""
 MOLIT_BJDONG_CD = ""
 ```
 
-`name`이 `revalue-matrix-api`이면 주소도 `https://revalue-matrix-api...workers.dev`로 달라집니다.
+`name`이 `revalue-matrix`이면 주소도 `https://revalue-matrix...workers.dev`로 달라집니다.
 
 ## 3. Cloudflare Worker가 진짜 배포됐는지 확인
 
 브라우저에서 아래 주소를 엽니다.
 
 ```text
-https://revalue-matrix.mindoryvault.workers.dev/api/health
+https://revalue-matrix-api.mindoryvault.workers.dev/api/health
 ```
 
 정상이라면 JSON 형태의 메시지가 나와야 합니다.  
@@ -69,4 +69,3 @@ Cmd + Shift + R
 ```
 
 또는 브라우저 시크릿 창에서 다시 접속합니다.
-

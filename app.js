@@ -35,12 +35,34 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function sameOriginApiBase() {
+  if (location.hostname.endsWith("github.io")) return "";
+  return location.origin;
+}
+
 function normalizeBase(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function bootstrapHiddenConfig() {
+  const params = new URLSearchParams(location.search);
+  const api = params.get("api");
+  if (api) {
+    localStorage.setItem("revalueApiBase", api);
+  }
+  if (params.has("api")) {
+    params.delete("api");
+    const clean = `${location.pathname}${params.toString() ? `?${params}` : ""}${location.hash}`;
+    history.replaceState(null, "", clean);
+  }
+}
+
 function apiBase() {
-  return normalizeBase(window.REVALUE_API_BASE || "");
+  return normalizeBase(
+    window.REVALUE_API_BASE
+    || localStorage.getItem("revalueApiBase")
+    || sameOriginApiBase()
+  );
 }
 
 function token() {
@@ -80,13 +102,7 @@ function saveAccessToken() {
 async function apiRequest(path, options = {}) {
   const base = apiBase();
   if (!base) {
-    throw new Error("배포 설정에 Cloudflare Worker 주소가 없습니다. config.js의 REVALUE_API_BASE에 Worker 주소를 넣어 주세요.");
-  }
-  if (/github\.io/i.test(base)) {
-    throw new Error("REVALUE_API_BASE에는 github.io 화면 주소가 아니라 Cloudflare Worker의 workers.dev 주소 또는 연결한 API 도메인을 넣어야 합니다.");
-  }
-  if (!/^https?:\/\//i.test(base)) {
-    throw new Error("REVALUE_API_BASE는 https:// 로 시작하는 전체 주소여야 합니다.");
+    throw new Error("관리자 설정이 필요합니다. 배포 설정에 서버 주소가 없습니다.");
   }
   const headers = {
     "Content-Type": "application/json",
@@ -96,10 +112,21 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${token()}`;
     headers["X-REVALUE-SITE-TOKEN"] = token();
   }
-  const response = await fetch(`${base}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    const reason = String(error?.message || error || "");
+    throw new Error(
+      "브라우저가 API 서버 호출을 막았습니다. "
+      + "config.js의 REVALUE_API_BASE가 Cloudflare Worker의 https://...workers.dev 주소인지, "
+      + "Worker 배포가 성공했는지, ALLOWED_ORIGINS가 GitHub Pages 도메인까지만 입력됐는지 확인해 주세요. "
+      + `현재 API 주소: ${base || "-"} / 원인: ${reason || "Failed to fetch"}`
+    );
+  }
   const bodyText = await response.text();
   let data = {};
   try {
@@ -114,7 +141,7 @@ async function apiRequest(path, options = {}) {
     const detail = String(data.detail || "");
     if (response.status === 404 && /GitHub Pages|Page not found|<!doctype html|<!DOCTYPE html/i.test(detail)) {
       throw new Error(
-        "API 서버 주소가 GitHub Pages 화면 주소로 되어 있습니다. config.js의 REVALUE_API_BASE에 Cloudflare Worker의 workers.dev 주소 또는 연결한 API 도메인을 넣어 주세요."
+        "API 서버 주소가 GitHub Pages 화면 주소로 되어 있습니다. config.js의 REVALUE_API_BASE에 Cloudflare Worker의 workers.dev 주소를 넣어 주세요."
       );
     }
     throw new Error(data.detail || `HTTP ${response.status}`);
@@ -463,6 +490,7 @@ function bindEvents() {
   });
 }
 
+bootstrapHiddenConfig();
 renderNeeds();
 renderScoreControls();
 bindEvents();
